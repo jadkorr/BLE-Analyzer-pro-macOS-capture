@@ -115,4 +115,4 @@ length limit.
 
 ## License
 
-Do whatever you want.  WinChipHead certainly wasn't going to help you.
+Do whatever you want, i am happy if anyone get any use for it.
