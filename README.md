@@ -84,7 +84,7 @@ You can natively sniff and jump to a BLE connection's hoppings channels using th
 
 ```bash
 # Wait for a CONNECT_IND packet and automatically track the frequency hopping
-./wch_capture -ff -ws -f
+./wch_capture -ws -f
 ```
 
 ### Additional Options
