@@ -66,6 +66,11 @@
 
 #include <fcntl.h>
 
+// Follow globals for PCAP headers
+static bool g_following = false;
+static uint32_t g_follow_aa = 0x8E89BED6;
+static uint32_t g_follow_crcinit = 0x555555;
+
 /* ── BLE channel → RF channel conversion ────────────────────────────────── */
 
 /*
@@ -223,7 +228,7 @@ static void pcap_write_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu,
       .signal_power = (int8_t)hdr->rssi,
       .noise_power = (int8_t)0x80, /* unknown */
       .access_address_offenses = 0,
-      .reference_access_address = hdr->access_addr,
+      .reference_access_address = g_following ? g_follow_aa : 0x8E89BED6,
       .flags = flags,
   };
 
@@ -245,11 +250,13 @@ static void pcap_write_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu,
    * Wireshark uses the Access Address to determine advertising vs. data
    * channel and routes to the correct dissector.
    */
-  uint32_t aa_le = hdr->access_addr; /* already LE uint32 */
+  uint32_t aa_le =
+      g_following ? g_follow_aa : hdr->access_addr; /* already LE uint32 */
 
   /* Compute BLE CRC-24 over the PDU bytes.
-   * Advertising CRC init = 0x555555 (all three adv channels use this). */
-  uint32_t crc_val = ble_crc24(0x555555, pdu, pdu_len);
+   * If following a connection, use the dynamic CRC, otherwise use Adv CRC */
+  uint32_t crc_val =
+      ble_crc24(g_following ? g_follow_crcinit : 0x555555, pdu, pdu_len);
   uint8_t crc[3] = {
       (uint8_t)(crc_val),
       (uint8_t)(crc_val >> 8),
@@ -287,8 +294,14 @@ static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
   wch_capture_config_t *cfg = cctx ? cctx->cfg : NULL;
   wch_device_t *dev = cctx ? cctx->dev : NULL;
 
-  /* Auto-follow logic */
-  if (cfg && cfg->follow_conn && hdr->pkt_type == PKT_CONNECT_REQ) {
+  /* Auto-follow logic:
+   * CONNECT_IND only appears on advertising channels (37/38/39).
+   * LL_DATA packets on data channels share the same pkt_type byte value,
+   * so we must guard against false positives using the channel index. */
+  bool is_adv_channel = (hdr->channel_index == 37 || hdr->channel_index == 38 ||
+                         hdr->channel_index == 39);
+  if (cfg && cfg->follow_conn && is_adv_channel &&
+      hdr->pkt_type == PKT_CONNECT_REQ) {
     if (pdu_len >= 34) {
       memcpy(cfg->conn_req_data, pdu + 12, 22);
       if (dev) {
