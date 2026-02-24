@@ -18,10 +18,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 install: $(TARGET)
-	install -Dm755 $(TARGET)          $(DESTDIR)/usr/local/bin/$(TARGET)
-	install -Dm644 99-wch-ble-analyzer.rules \
-	    $(DESTDIR)/etc/udev/rules.d/99-wch-ble-analyzer.rules
-	@echo "Run: sudo udevadm control --reload-rules && sudo udevadm trigger"
+	install -m 755 $(TARGET) $(DESTDIR)/usr/local/bin/$(TARGET)
 
 clean:
 	rm -f $(OBJS) $(TARGET)
