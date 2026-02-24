@@ -34,13 +34,19 @@ brew install libusb pkg-config
 
 ---
 
-## Build
+## Build & Install
 
 Compile the project using the included Makefile:
 
 ```bash
 make clean
 make
+```
+
+You can optionally install the compiled binary globally to run it from anywhere on your Mac:
+
+```bash
+sudo make install
 ```
 
 ---
