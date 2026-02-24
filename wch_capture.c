@@ -284,7 +284,9 @@ static void pcap_write_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu,
 /* ── Packet callback ────────────────────────────────────────────────────── */
 
 struct cb_ctx {
-  wch_device_t *dev;
+  wch_device_t *dev;  /* this MCU */
+  wch_device_t *devs; /* all MCUs */
+  int ndev;           /* MCU count */
   wch_capture_config_t *cfg;
 };
 
@@ -301,7 +303,7 @@ static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
   bool is_adv_channel = (hdr->channel_index == 37 || hdr->channel_index == 38 ||
                          hdr->channel_index == 39);
   if (cfg && cfg->follow_conn && is_adv_channel &&
-      hdr->pkt_type == PKT_CONNECT_REQ) {
+      hdr->pkt_type == PKT_CONNECT_REQ && !g_following) {
     if (pdu_len >= 36) {
       /*
        * CONNECT_IND PDU layout:
@@ -314,14 +316,19 @@ static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
        *   [14..17] = Access Address (4 bytes)
        *   [18..20] = CRCInit (3 bytes)
        *   [21..35] = WinSize, WinOffset, Interval, Latency, Timeout, ChMap, Hop
+       *
+       * g_following is a one-shot latch: once the first MCU sets it,
+       * all other MCUs skip their CONNECT_IND processing (prevents race where
+       * two MCUs detect different connections and overwrite g_follow_aa).
        */
       memcpy(cfg->conn_req_data, pdu + 14, 22);
 
-      /* Cache AA and CRCInit for PCAP pseudo-header */
-      g_following = true;
+      /* Latch AA and CRCInit — set g_following LAST to act as a write barrier
+       */
       memcpy(&g_follow_aa, pdu + 14, 4);
       g_follow_crcinit =
           pdu[18] | ((uint32_t)pdu[19] << 8) | ((uint32_t)pdu[20] << 16);
+      g_following = true; /* latch: other MCUs now see this and skip */
 
       fprintf(
           stderr,
@@ -329,8 +336,19 @@ static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
           dev ? dev->bus : -1, dev ? dev->addr : -1, g_follow_aa,
           g_follow_crcinit);
 
-      if (dev)
-        wch_start_capture(dev, cfg);
+      /* Reconfigure ALL MCUs with the connection parameters so each
+       * chip simultaneously hunts the same data channel hop sequence.
+       * This maximises coverage of early events (LL_FEATURE_REQ,
+       * LL_ENC_REQ) that appear within the first few connection events. */
+      if (cctx->devs) {
+        for (int _i = 0; _i < cctx->ndev; _i++) {
+          if (!cctx->devs[_i].is_open)
+            continue;
+          wch_reconfig_capture(&cctx->devs[_i], cfg);
+        }
+      } else if (dev) {
+        wch_reconfig_capture(dev, cfg);
+      }
     } else {
       fprintf(stderr,
               "[wch debug] CONNECT_IND seen but PDU len=%d (expected >=36)\n",
@@ -762,7 +780,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < ndev && !g_stop; i++) {
       if (!devs[i].is_open || !bufs[i])
         continue;
-      struct cb_ctx cctx = {&devs[i], &cfg};
+      struct cb_ctx cctx = {&devs[i], devs, ndev, &cfg};
       for (;;) {
         int n = wch_read_packets(&devs[i], bufs[i], on_packet, &cctx,
                                  DRAIN_POLL_MS);
@@ -780,7 +798,7 @@ int main(int argc, char *argv[]) {
       for (int i = 0; i < ndev && !g_stop; i++) {
         if (!devs[i].is_open || !bufs[i])
           continue;
-        struct cb_ctx cctx = {&devs[i], &cfg};
+        struct cb_ctx cctx = {&devs[i], devs, ndev, &cfg};
         wch_read_packets(&devs[i], bufs[i], on_packet, &cctx, IDLE_WAIT_MS);
       }
     }

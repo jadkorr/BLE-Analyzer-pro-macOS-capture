@@ -268,7 +268,51 @@ int wch_start_capture(wch_device_t *dev, const wch_capture_config_t *cfg) {
   return 0;
 }
 
-/* ── wch_stop_capture ────────────────────────────────────────────────────── */
+/* ── wch_reconfig_capture ─────────────────────────────────────────────────
+ *
+ * Fast reconfiguration used after detecting a CONNECT_IND.  Skips the
+ * AA 84 identify step (which costs ~20-50 ms of USB round-trip) so we
+ * reach the data channels before the LL_ENC_REQ / LL_START_ENC window
+ * closes.  Only AA 81 + AA A1 are sent.
+ */
+int wch_reconfig_capture(wch_device_t *dev, const wch_capture_config_t *cfg) {
+  uint8_t frame[64];
+  uint8_t resp[64];
+  int got, r;
+
+  /* AA 81 BLE monitor config with connection LLData */
+  memset(frame, 0, sizeof(frame));
+  frame[0] = WCH_MAGIC;
+  frame[1] = CMD_BLE_CONFIG;
+  frame[2] = 0x19;
+  frame[3] = 0x00;
+  frame[4] = 0x01; /* BLE monitor mode flag */
+  frame[5] = cfg->phy ? cfg->phy : 1;
+  frame[6] = 0x00; /* channel 0 = all */
+  if (cfg->follow_conn && cfg->conn_req_data[0])
+    memcpy(frame + 7, cfg->conn_req_data, 22);
+
+  r = bulk_write(dev, frame, 4 + 25);
+  if (r != 0 && r != LIBUSB_ERROR_TIMEOUT)
+    return r;
+
+  /* drain immediately-streamed bytes */
+  bulk_read(dev, resp, sizeof(resp), &got, 50);
+
+  /* AA A1 start-scan trigger */
+  memset(frame, 0, sizeof(frame));
+  frame[0] = WCH_MAGIC;
+  frame[1] = CMD_SCAN_START;
+  frame[2] = 0x00;
+  frame[3] = 0x00;
+
+  r = bulk_write(dev, frame, 4);
+  if (r != 0 && r != LIBUSB_ERROR_TIMEOUT)
+    return r;
+
+  bulk_read(dev, resp, sizeof(resp), &got, 200);
+  return 0;
+}
 
 int wch_stop_capture(wch_device_t *dev) {
   /*

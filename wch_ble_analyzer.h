@@ -238,6 +238,7 @@ int wch_open_device(wch_device_t *dev);
  * Returns 0 on success, negative libusb error on failure.
  */
 int wch_start_capture(wch_device_t *dev, const wch_capture_config_t *cfg);
+int wch_reconfig_capture(wch_device_t *dev, const wch_capture_config_t *cfg);
 
 /**
  * Send the capture stop command to one MCU.
