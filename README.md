@@ -78,6 +78,15 @@ By default, the FIFO pipe is created at `/tmp/blepipe`. You can specify a custom
 ./wch_capture -ffn /tmp/my_custom_pipe -ws
 ```
 
+### Dynamic Connection Following
+
+You can natively sniff and jump to a BLE connection's hoppings channels using the CH582F hardware by injecting the newly implemented `-f` flag:
+
+```bash
+# Wait for a CONNECT_IND packet and automatically track the frequency hopping
+./wch_capture -ff -ws -f
+```
+
 ### Additional Options
 
 ```text
@@ -94,6 +103,7 @@ Options:
   -A AADDR      2.4G access addr (hex, e.g. 8E89BED6)
   -C CRCINIT    2.4G CRC init (6 hex chars, e.g. 555555)
   -W WHITEN     2.4G whitening init (hex byte)
+  -f            Follow connections dynamically (auto jump to data channels)
   -ff           Enable FIFO pipeline to communicate with Wireshark
   -ffn NAME     FIFO file name (default: /tmp/blepipe)
   -ws           Open Wireshark reading from FIFO

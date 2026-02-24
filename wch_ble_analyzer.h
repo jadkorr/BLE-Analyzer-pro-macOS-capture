@@ -75,7 +75,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-
 /* ── USB IDs ─────────────────────────────────────────────────────────────── */
 #define WCH_VID 0x1A86
 #define WCH_PID_BLE_MCU 0x8009 /* CH582F BLE MCU */
@@ -88,8 +87,9 @@
 #define EP_MAX_PACKET_SIZE 64
 
 /* Bulk transfer sizes (from Windows driver analysis) */
-#define BULK_TRANSFER_SIZE 0x2800 /* 10240 bytes – driver's default read size \
-                                   */
+#define BULK_TRANSFER_SIZE                                                     \
+  0x2800 /* 10240 bytes – driver's default read size                         \
+          */
 #define BULK_READ_TIMEOUT_MS 1000
 #define INT_READ_TIMEOUT_MS 200
 
@@ -180,6 +180,9 @@ typedef struct {
   uint32_t access_addr_24g; /* Access Address for 2.4G mode          */
   uint8_t crc_init[3];      /* CRC init value for 2.4G mode          */
   uint8_t whitening;        /* Whitening init value for 2.4G mode    */
+  /* Connection tracking */
+  bool follow_conn;          /* Auto-follow Connections               */
+  uint8_t conn_req_data[22]; /* 22-byte LLData from CONNECT_IND       */
 } wch_capture_config_t;
 
 /* ── Per-device handle ───────────────────────────────────────────────────── */

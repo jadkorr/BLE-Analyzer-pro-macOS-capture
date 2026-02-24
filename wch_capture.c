@@ -276,10 +276,32 @@ static void pcap_write_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu,
 
 /* ── Packet callback ────────────────────────────────────────────────────── */
 
+struct cb_ctx {
+  wch_device_t *dev;
+  wch_capture_config_t *cfg;
+};
+
 static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
-                      void *ctx) {
-  if (ctx) {
-    wch_capture_config_t *cfg = (wch_capture_config_t *)ctx;
+                      void *ctx_arg) {
+  struct cb_ctx *cctx = (struct cb_ctx *)ctx_arg;
+  wch_capture_config_t *cfg = cctx ? cctx->cfg : NULL;
+  wch_device_t *dev = cctx ? cctx->dev : NULL;
+
+  /* Auto-follow logic */
+  if (cfg && cfg->follow_conn && hdr->pkt_type == PKT_CONNECT_REQ) {
+    if (pdu_len == 34) {
+      memcpy(cfg->conn_req_data, pdu + 12, 22);
+      if (dev) {
+        fprintf(stderr,
+                "[wch bus=%d addr=%d] Following CONNECT_IND! Reconfiguring "
+                "sniffer...\n",
+                dev->bus, dev->addr);
+        wch_start_capture(dev, cfg);
+      }
+    }
+  }
+
+  if (cfg) {
     uint8_t zero_mac[6] = {0};
     bool has_adv_filter = memcmp(cfg->adv_addr, zero_mac, 6) != 0;
     bool has_init_filter = memcmp(cfg->initiator_addr, zero_mac, 6) != 0;
@@ -371,6 +393,8 @@ static void usage(const char *prog) {
           "  -A AADDR      2.4G access addr (hex, e.g. 8E89BED6)\n"
           "  -C CRCINIT    2.4G CRC init (6 hex chars, e.g. 555555)\n"
           "  -W WHITEN     2.4G whitening init (hex byte)\n"
+          "  -f            Follow connections dynamically (auto jump to data "
+          "channels)\n"
           "  -ff           Enable FIFO pipeline to communicate with Wireshark\n"
           "  -ffn NAME     FIFO file name (default: /tmp/blepipe)\n"
           "  -ws           Open Wireshark reading from FIFO\n"
@@ -433,8 +457,11 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  while ((opt = getopt(argc, argv, "vw:p:i:a:k:K:2c:A:C:W:h")) != -1) {
+  while ((opt = getopt(argc, argv, "vw:p:i:a:k:K:2c:A:C:W:fh")) != -1) {
     switch (opt) {
+    case 'f':
+      cfg.follow_conn = true;
+      break;
     case 'v':
       g_verbose = true;
       break;
@@ -698,9 +725,10 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < ndev && !g_stop; i++) {
       if (!devs[i].is_open || !bufs[i])
         continue;
+      struct cb_ctx cctx = {&devs[i], &cfg};
       for (;;) {
-        int n =
-            wch_read_packets(&devs[i], bufs[i], on_packet, &cfg, DRAIN_POLL_MS);
+        int n = wch_read_packets(&devs[i], bufs[i], on_packet, &cctx,
+                                 DRAIN_POLL_MS);
         if (n > 0) {
           any_data = true;
           continue;
@@ -715,7 +743,8 @@ int main(int argc, char *argv[]) {
       for (int i = 0; i < ndev && !g_stop; i++) {
         if (!devs[i].is_open || !bufs[i])
           continue;
-        wch_read_packets(&devs[i], bufs[i], on_packet, &cfg, IDLE_WAIT_MS);
+        struct cb_ctx cctx = {&devs[i], &cfg};
+        wch_read_packets(&devs[i], bufs[i], on_packet, &cctx, IDLE_WAIT_MS);
       }
     }
   }
