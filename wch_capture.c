@@ -299,6 +299,16 @@ static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
           match = true;
       }
 
+      /* Data PDUs (like LL_ENC_REQ) do not contain MAC addresses in their
+       * headers. If it's a data packet (type >= 0x0F), we bypass the MAC filter
+       * so the user can still see control opcodes when the sniffer happens to
+       * be on the right channel.
+       */
+      if (hdr->pkt_type >= PKT_DATA_PDU_RESERVED &&
+          hdr->pkt_type <= PKT_LL_CTRL_TERMINATE_IND) {
+        match = true;
+      }
+
       if (!match)
         return; /* Drop packet quietly */
     }
