@@ -442,10 +442,31 @@ int wch_read_packets(wch_device_t *dev, uint8_t *buf, wch_packet_cb_t cb,
     const uint8_t *pdu = p + 10;
     int pdu_len = 2 + (int)pdu_plen;
 
-    /* Clamp to what's actually in the buffer */
+    /*
+     * The hardware frame says `plen` bytes of payload total.
+     * The BLE header says `pdu_plen` bytes for the PDU.
+     * We suspect the hardware drops bytes randomly or our `avail` math
+     * is wrong for long Data Channel packets like LL_ENC_REQ.
+     */
     int avail = (int)plen - 10;
-    if (pdu_len > avail)
-      pdu_len = avail;
+    if (pdu_len > avail && pkt_type_ble != PKT_ADV_IND && pdu_len > 4) {
+      fprintf(stderr,
+              "[wch debug] Truncation warning: pdu_plen=%d (need %d) but USB "
+              "plen=%d (avail %d). PDU type=0x%02X\n",
+              pdu_plen, pdu_len, plen, avail, pkt_type_ble);
+
+      /* Stop clamping. Let Wireshark parse the full pdu_len padding */
+    }
+
+    if (pdu_len > 30) {
+      fprintf(stderr,
+              "[wch debug] Large PDU (len=%d). Raw Frame [%d bytes]: ", pdu_len,
+              frame_size);
+      for (int k = 0; k < frame_size && k < 128; k++) {
+        fprintf(stderr, "%02X ", buf[offset + k]);
+      }
+      fprintf(stderr, "\n");
+    }
 
     dev->rx_count++;
     if (cb)
