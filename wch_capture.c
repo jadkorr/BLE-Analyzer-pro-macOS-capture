@@ -289,7 +289,7 @@ static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
 
   /* Auto-follow logic */
   if (cfg && cfg->follow_conn && hdr->pkt_type == PKT_CONNECT_REQ) {
-    if (pdu_len == 34) {
+    if (pdu_len >= 34) {
       memcpy(cfg->conn_req_data, pdu + 12, 22);
       if (dev) {
         fprintf(stderr,
@@ -298,6 +298,10 @@ static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
                 dev->bus, dev->addr);
         wch_start_capture(dev, cfg);
       }
+    } else {
+      fprintf(stderr,
+              "[wch debug] CONNECT_IND seen but PDU len=%d (expected >=34)\n",
+              pdu_len);
     }
   }
 
