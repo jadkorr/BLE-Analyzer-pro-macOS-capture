@@ -278,7 +278,32 @@ static void pcap_write_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu,
 
 static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
                       void *ctx) {
-  (void)ctx;
+  if (ctx) {
+    wch_capture_config_t *cfg = (wch_capture_config_t *)ctx;
+    uint8_t zero_mac[6] = {0};
+    bool has_adv_filter = memcmp(cfg->adv_addr, zero_mac, 6) != 0;
+    bool has_init_filter = memcmp(cfg->initiator_addr, zero_mac, 6) != 0;
+
+    if (has_adv_filter || has_init_filter) {
+      bool match = false;
+
+      if (has_adv_filter) {
+        if (memcmp(hdr->src_addr, cfg->adv_addr, 6) == 0 ||
+            memcmp(hdr->dst_addr, cfg->adv_addr, 6) == 0)
+          match = true;
+      }
+
+      if (has_init_filter) {
+        if (memcmp(hdr->src_addr, cfg->initiator_addr, 6) == 0 ||
+            memcmp(hdr->dst_addr, cfg->initiator_addr, 6) == 0)
+          match = true;
+      }
+
+      if (!match)
+        return; /* Drop packet quietly */
+    }
+  }
+
   g_pkt_count++;
 
   if (g_verbose)
@@ -665,7 +690,7 @@ int main(int argc, char *argv[]) {
         continue;
       for (;;) {
         int n =
-            wch_read_packets(&devs[i], bufs[i], on_packet, NULL, DRAIN_POLL_MS);
+            wch_read_packets(&devs[i], bufs[i], on_packet, &cfg, DRAIN_POLL_MS);
         if (n > 0) {
           any_data = true;
           continue;
@@ -680,7 +705,7 @@ int main(int argc, char *argv[]) {
       for (int i = 0; i < ndev && !g_stop; i++) {
         if (!devs[i].is_open || !bufs[i])
           continue;
-        wch_read_packets(&devs[i], bufs[i], on_packet, NULL, IDLE_WAIT_MS);
+        wch_read_packets(&devs[i], bufs[i], on_packet, &cfg, IDLE_WAIT_MS);
       }
     }
   }
