@@ -67,8 +67,8 @@
 #include <fcntl.h>
 
 // Follow globals for PCAP headers
-static bool g_following = false;
-static uint32_t g_follow_aa = 0x8E89BED6;
+bool g_following = false;
+uint32_t g_follow_aa = 0x8E89BED6;
 static uint32_t g_follow_crcinit = 0x555555;
 
 /* ── BLE channel → RF channel conversion ────────────────────────────────── */

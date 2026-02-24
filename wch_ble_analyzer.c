@@ -29,10 +29,16 @@
  */
 
 #include "wch_ble_analyzer.h"
-
+#include <libusb.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Globals defined in wch_capture.c – shared for data channel AA substitution */
+extern bool g_following;
+extern uint32_t g_follow_aa;
 
 /* ── Protocol constants ─────────────────────────────────────────────────── */
 
@@ -367,7 +373,11 @@ int wch_read_packets(wch_device_t *dev, uint8_t *buf, wch_packet_cb_t cb,
     hdr.rssi = rssi;
     hdr.pkt_type = pkt_type_ble;
     hdr.direction = flags & 0x01; /* 0=M→S, 1=S→M */
-    hdr.access_addr = BLE_ADV_AA; /* advertising channels */
+    /* Use connection AA for data channels, advertising AA for adv channels.
+     * Wireshark routes to the correct LL dissector based on the AA.
+     * g_follow_aa is set when a CONNECT_IND is detected. */
+    bool is_data_ch = (channel <= 36);
+    hdr.access_addr = (is_data_ch && g_following) ? g_follow_aa : BLE_ADV_AA;
     hdr.channel_index = channel;
     hdr.timestamp_us = ts64;
     hdr.interval_us = dt;
