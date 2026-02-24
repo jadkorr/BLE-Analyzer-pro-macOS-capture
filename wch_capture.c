@@ -351,7 +351,7 @@ int main(int argc, char *argv[]) {
   fprintf(stderr, "\n"
                   "WCH BLE Analyzer PRO macOS Capture tool\n"
                   "Author: Xecaz\n"
-                  "Modded for MacOS by jadkorr\n"
+                  "Modded for MacOS by Jadkorr (https://x.com/jadkorr)\n"
                   "---------------------------------------\n"
                   "\n");
 

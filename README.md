@@ -1,7 +1,7 @@
 # WCH BLE Analyzer Pro — macOS Capture Tool
 
 > **Note**: This is a fork of the original Linux driver repository created by **Xecaz** ([https://github.com/xecaz/BLE-Analyzer-pro-linux-capture](https://github.com/xecaz/BLE-Analyzer-pro-linux-capture)).
-> Modded for macOS with real-time Wireshark FIFO streaming by **jadkorr**.
+> Modded for macOS with real-time Wireshark FIFO streaming by **Jadkorr** ([https://x.com/jadkorr](https://x.com/jadkorr)).
 
 A macOS-compatible libusb-1.0 driver for the **WCH BLE Analyzer Pro** — a $30 USB BLE 5.1 sniffer built around three CH582F RISC-V MCUs and a CH334 hub. Each MCU gets its own advertising channel (37 / 38 / 39), so you capture the entire BLE advertising spectrum simultaneously. Output is a standard PCAP that Wireshark decodes natively.
 
@@ -98,4 +98,9 @@ Options:
 
 ## License
 
-Do whatever you want, I am happy if anyone gets any use out of it.
+This project is licensed under the **MIT License**.
+
+- **WCH Reverse Engineering & Original Linux Base:** Copyright (c) 2024-2026 Xecaz.
+- **macOS Port & FIFO Integration:** Copyright (c) 2026 Jadkorr (https://x.com/jadkorr).
+
+See the [LICENSE](LICENSE) file for complete details.
