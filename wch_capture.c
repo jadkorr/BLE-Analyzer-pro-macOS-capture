@@ -302,18 +302,38 @@ static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
                          hdr->channel_index == 39);
   if (cfg && cfg->follow_conn && is_adv_channel &&
       hdr->pkt_type == PKT_CONNECT_REQ) {
-    if (pdu_len >= 34) {
-      memcpy(cfg->conn_req_data, pdu + 12, 22);
-      if (dev) {
-        fprintf(stderr,
-                "[wch bus=%d addr=%d] Following CONNECT_IND! Reconfiguring "
-                "sniffer...\n",
-                dev->bus, dev->addr);
+    if (pdu_len >= 36) {
+      /*
+       * CONNECT_IND PDU layout:
+       *   pdu[0..1]   = PDU header (type + length)
+       *   pdu[2..7]   = InitA  (Initiator MAC, 6 bytes)
+       *   pdu[8..13]  = AdvA   (Advertiser MAC, 6 bytes)
+       *   pdu[14..35] = LLData (22 bytes) ← what the firmware needs
+       *
+       * LLData layout:
+       *   [14..17] = Access Address (4 bytes)
+       *   [18..20] = CRCInit (3 bytes)
+       *   [21..35] = WinSize, WinOffset, Interval, Latency, Timeout, ChMap, Hop
+       */
+      memcpy(cfg->conn_req_data, pdu + 14, 22);
+
+      /* Cache AA and CRCInit for PCAP pseudo-header */
+      g_following = true;
+      memcpy(&g_follow_aa, pdu + 14, 4);
+      g_follow_crcinit =
+          pdu[18] | ((uint32_t)pdu[19] << 8) | ((uint32_t)pdu[20] << 16);
+
+      fprintf(
+          stderr,
+          "[wch bus=%d addr=%d] Following CONNECT_IND! AA=%08X CRCInit=%06X\n",
+          dev ? dev->bus : -1, dev ? dev->addr : -1, g_follow_aa,
+          g_follow_crcinit);
+
+      if (dev)
         wch_start_capture(dev, cfg);
-      }
     } else {
       fprintf(stderr,
-              "[wch debug] CONNECT_IND seen but PDU len=%d (expected >=34)\n",
+              "[wch debug] CONNECT_IND seen but PDU len=%d (expected >=36)\n",
               pdu_len);
     }
   }
