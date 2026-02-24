@@ -71,6 +71,11 @@ bool g_following = false;
 uint32_t g_follow_aa = 0x8E89BED6;
 static uint32_t g_follow_crcinit = 0x555555;
 
+/* Set to true by on_packet when CONNECT_IND is seen.
+ * The MAIN LOOP reads this flag and performs the USB reconfig after
+ * the current bulk_read returns, avoiding re-entrant USB access. */
+static volatile bool g_need_reconfig = false;
+
 /* ── BLE channel → RF channel conversion ────────────────────────────────── */
 
 /*
@@ -304,7 +309,21 @@ static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
                          hdr->channel_index == 39);
   if (cfg && cfg->follow_conn && is_adv_channel &&
       hdr->pkt_type == PKT_CONNECT_REQ && !g_following) {
-    if (pdu_len >= 36) {
+    /*
+     * Strict CONNECT_IND validation:
+     * 1. pdu[1] MUST be exactly 34 (legacy CONNECT_IND is always
+     *    34 bytes: InitA(6)+AdvA(6)+LLData(22)). Anything else is
+     *    a corrupt read or a different PDU type.
+     * 2. pdu_len must be >= 36 (to safely read pdu[0..35]).
+     * 3. If an AdvA filter is configured (-a flag), pdu[8..13] must
+     *    match — we only want the connection TO OUR target device.
+     */
+    bool valid_llength = (pdu_len >= 36 && pdu[1] == 34);
+    uint8_t zero_mac[6] = {0};
+    bool has_adv_filter = (memcmp(cfg->adv_addr, zero_mac, 6) != 0);
+    bool adva_match = !has_adv_filter ||
+                      (pdu_len >= 14 && memcmp(pdu + 8, cfg->adv_addr, 6) == 0);
+    if (valid_llength && adva_match) {
       /*
        * CONNECT_IND PDU layout:
        *   pdu[0..1]   = PDU header (type + length)
@@ -330,25 +349,27 @@ static void on_packet(const wch_pkt_hdr_t *hdr, const uint8_t *pdu, int pdu_len,
           pdu[18] | ((uint32_t)pdu[19] << 8) | ((uint32_t)pdu[20] << 16);
       g_following = true; /* latch: other MCUs now see this and skip */
 
-      fprintf(
-          stderr,
-          "[wch bus=%d addr=%d] Following CONNECT_IND! AA=%08X CRCInit=%06X\n",
-          dev ? dev->bus : -1, dev ? dev->addr : -1, g_follow_aa,
-          g_follow_crcinit);
+      fprintf(stderr,
+              "[wch bus=%d addr=%d] Following CONNECT_IND! AA=%08X "
+              "CRCInit=%06X pdu_len=%d\n",
+              dev ? dev->bus : -1, dev ? dev->addr : -1, g_follow_aa,
+              g_follow_crcinit, pdu_len);
 
-      /* Reconfigure ALL MCUs with the connection parameters so each
-       * chip simultaneously hunts the same data channel hop sequence.
-       * This maximises coverage of early events (LL_FEATURE_REQ,
-       * LL_ENC_REQ) that appear within the first few connection events. */
-      if (cctx->devs) {
-        for (int _i = 0; _i < cctx->ndev; _i++) {
-          if (!cctx->devs[_i].is_open)
-            continue;
-          wch_reconfig_capture(&cctx->devs[_i], cfg);
-        }
-      } else if (dev) {
-        wch_reconfig_capture(dev, cfg);
-      }
+      /* Debug: dump raw pdu bytes so we can verify offsets */
+      fprintf(stderr, "[wch debug] PDU hex:");
+      for (int _b = 0; _b < 20 && _b < pdu_len; _b++)
+        fprintf(stderr, " %02X", pdu[_b]);
+      fprintf(stderr, "\n");
+      fprintf(stderr, "[wch debug] LLData (pdu[14..19]):");
+      for (int _b = 14; _b < 20 && _b < pdu_len; _b++)
+        fprintf(stderr, " %02X", pdu[_b]);
+      fprintf(stderr, "\n");
+
+      /* Signal the main loop to reconfig all MCUs.
+       * We CANNOT call wch_reconfig_capture here: on_packet runs inside
+       * wch_read_packets (a bulk_read context) — doing another bulk_write
+       * on the same handle is re-entrant USB access and corrupts the read. */
+      g_need_reconfig = true;
     } else {
       fprintf(stderr,
               "[wch debug] CONNECT_IND seen but PDU len=%d (expected >=36)\n",
@@ -789,6 +810,20 @@ int main(int argc, char *argv[]) {
           continue;
         }
         break; /* n == 0 → timeout, buffer empty */
+      }
+    }
+
+    /* After draining all MCUs, check if a CONNECT_IND was detected.
+     * Reconfig all MCUs here (outside any bulk_read context) so USB
+     * access is safe and not re-entrant. */
+    if (g_need_reconfig && !g_stop) {
+      g_need_reconfig = false;
+      fprintf(stderr,
+              "[wch] Reconfiguring all MCUs for connection follow...\n");
+      for (int i = 0; i < ndev; i++) {
+        if (!devs[i].is_open)
+          continue;
+        wch_reconfig_capture(&devs[i], &cfg);
       }
     }
 
