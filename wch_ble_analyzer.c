@@ -231,6 +231,12 @@ int wch_start_capture(wch_device_t *dev, const wch_capture_config_t *cfg) {
   frame[6] = cfg->ble_channel;        /* BLE adv channel: 37/38/39 (0 = all) */
   /* bytes [7..28] = zeros (no MAC filters, no LTK, no pass-key) */
   if (cfg->follow_conn) {
+    /* Write the full 22-byte LLData payload strictly extracted from the
+     * CONNECT_IND. This precisely configures the CH582F silicon's Access
+     * Address (bytes 0-3), CRCInit (bytes 4-6), HopIncrement, and Channel Map
+     * directly from the C structure. If CRCInit is omitted (0x000000), the
+     * hardware will drop all valid data opcodes due to intentional CRC failure!
+     */
     memcpy(frame + 7, cfg->conn_req_data, 22);
   }
 
@@ -277,8 +283,7 @@ int wch_start_capture(wch_device_t *dev, const wch_capture_config_t *cfg) {
  */
 int wch_reconfig_capture(wch_device_t *dev, const wch_capture_config_t *cfg) {
   uint8_t frame[64];
-  uint8_t resp[64];
-  int got, r;
+  int r;
 
   /* AA 81 BLE monitor config with connection LLData */
   memset(frame, 0, sizeof(frame));
@@ -287,30 +292,48 @@ int wch_reconfig_capture(wch_device_t *dev, const wch_capture_config_t *cfg) {
   frame[2] = 0x19;
   frame[3] = 0x00;
   frame[4] = 0x01; /* BLE monitor mode flag */
+  if (cfg->ble_channel)
+    frame[4] |= 0x02; /* Must set bit 1 for non-zero channels! */
   frame[5] = cfg->phy ? cfg->phy : 1;
-  frame[6] = 0x00; /* channel 0 = all */
-  if (cfg->follow_conn && cfg->conn_req_data[0])
-    memcpy(frame + 7, cfg->conn_req_data, 22);
+  frame[6] = cfg->ble_channel;
+
+  if (cfg->follow_conn && cfg->conn_req_data[0]) {
+    /* Critical Hardware Offset Fix:
+     * When hopping to a Data Channel, the CH582F firmware cannot natively
+     * track connections via BLE Monitor mode just by pasting the LLData struct.
+     * We MUST use the explicit offsets reverse-engineered from
+     * the Windows `BleAnalyzer64.exe` binary.
+     *
+     * In BLE Monitor mode, the hardware accepts
+     * explicit Access Address, CRCInit, and RF Channel via these exact offsets:
+     *   frame[15] = Access Address (4 bytes)
+     *   frame[19] = CRCInit (3 bytes)
+     *   frame[23] = Channel Index (0-39)
+     */
+    /* The first 4 bytes of conn_req_data contain the Access Address */
+    memcpy(frame + 15, cfg->conn_req_data, 4);
+
+    /* The next 3 bytes (conn_req_data[4..6]) contain the CRCInit */
+    memcpy(frame + 19, cfg->conn_req_data + 4, 3);
+
+    /* The active data channel is passed in cfg->channel */
+    frame[23] = cfg->channel;
+  }
 
   r = bulk_write(dev, frame, 4 + 25);
   if (r != 0 && r != LIBUSB_ERROR_TIMEOUT)
     return r;
 
-  /* drain immediately-streamed bytes */
-  bulk_read(dev, resp, sizeof(resp), &got, 50);
-
-  /* AA A1 start-scan trigger */
+  /* Send AA A1 to commit config and explicitly start hopping */
   memset(frame, 0, sizeof(frame));
   frame[0] = WCH_MAGIC;
   frame[1] = CMD_SCAN_START;
   frame[2] = 0x00;
   frame[3] = 0x00;
-
   r = bulk_write(dev, frame, 4);
   if (r != 0 && r != LIBUSB_ERROR_TIMEOUT)
     return r;
 
-  bulk_read(dev, resp, sizeof(resp), &got, 200);
   return 0;
 }
 
@@ -417,9 +440,15 @@ int wch_read_packets(wch_device_t *dev, uint8_t *buf, wch_packet_cb_t cb,
     hdr.rssi = rssi;
     hdr.pkt_type = pkt_type_ble;
     hdr.direction = flags & 0x01; /* 0=M→S, 1=S→M */
-    /* Use connection AA for data channels, advertising AA for adv channels.
-     * Wireshark routes to the correct LL dissector based on the AA.
-     * g_follow_aa is set when a CONNECT_IND is detected. */
+    /* Determine if this is a Data Channel frame.
+     *
+     * The WCH hardware updates `channel_index` to the physical data channel.
+     * Since advertising channels are strictly 37, 38, 39, anything <= 36
+     * is definitively a Data Channel packed.
+     *
+     * We also guard on `g_following` so that we never assign the connection AA
+     * before we have actually seen a CONNECT_IND (avoids false positives).
+     */
     bool is_data_ch = (channel <= 36);
     hdr.access_addr = (is_data_ch && g_following) ? g_follow_aa : BLE_ADV_AA;
     hdr.channel_index = channel;
@@ -435,38 +464,9 @@ int wch_read_packets(wch_device_t *dev, uint8_t *buf, wch_packet_cb_t cb,
         pdu_plen >= 12 && plen >= 18 + 6)
       memcpy(hdr.dst_addr, p + 18, 6);
 
-    /*
-     * BLE LL PDU for callback: [pdu_hdr0][pdu_plen][PDU payload…]
-     * Total = 2 + pdu_plen bytes.
-     */
+    /* BLE LL PDU for callback: [pdu_hdr0][pdu_plen][PDU payload…] */
     const uint8_t *pdu = p + 10;
     int pdu_len = 2 + (int)pdu_plen;
-
-    /*
-     * The hardware frame says `plen` bytes of payload total.
-     * The BLE header says `pdu_plen` bytes for the PDU.
-     * We suspect the hardware drops bytes randomly or our `avail` math
-     * is wrong for long Data Channel packets like LL_ENC_REQ.
-     */
-    int avail = (int)plen - 10;
-    if (pdu_len > avail && pkt_type_ble != PKT_ADV_IND && pdu_len > 4) {
-      fprintf(stderr,
-              "[wch debug] Truncation warning: pdu_plen=%d (need %d) but USB "
-              "plen=%d (avail %d). PDU type=0x%02X\n",
-              pdu_plen, pdu_len, plen, avail, pkt_type_ble);
-
-      /* Stop clamping. Let Wireshark parse the full pdu_len padding */
-    }
-
-    if (pdu_len > 30) {
-      fprintf(stderr,
-              "[wch debug] Large PDU (len=%d). Raw Frame [%d bytes]: ", pdu_len,
-              frame_size);
-      for (int k = 0; k < frame_size && k < 128; k++) {
-        fprintf(stderr, "%02X ", buf[offset + k]);
-      }
-      fprintf(stderr, "\n");
-    }
 
     dev->rx_count++;
     if (cb)

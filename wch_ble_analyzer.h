@@ -195,9 +195,10 @@ typedef struct {
   uint64_t rx_count;  /* Good packets received   */
   uint64_t err_count; /* Status/unknown frames   */
   /* Timestamp extension (device provides 32-bit μs; we extend to 64-bit) */
-  uint32_t ts_prev_us; /* Previous 32-bit timestamp */
-  uint64_t ts_hi_us;   /* High 32 bits accumulated  */
-  uint64_t pkt_seq;    /* Monotonic sequence number */
+  uint32_t ts_prev_us;        /* Previous 32-bit timestamp */
+  uint64_t ts_hi_us;          /* High 32 bits accumulated  */
+  uint64_t pkt_seq;           /* Monotonic sequence number */
+  uint64_t host_hw_offset_us; /* Phase-Locked Loop USB compensator offset */
 } wch_device_t;
 
 /* ── Callback prototype ─────────────────────────────────────────────────────
